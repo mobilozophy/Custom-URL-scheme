@@ -95,32 +95,48 @@ static void swizzleMethodOnClass(Class class, SEL originalSelector, SEL swizzled
                             @selector(application:openURL:options:),
                             @selector(launchMyApp_application:openURL:options:));
 
-        // For iOS 13+, we need to swizzle the SceneDelegate
-        // Cordova uses CDVAppDelegate which may have a scene delegate
-        // We'll also observe for scene connection to catch cold start URLs
-
-        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneWillConnectNotification
-                                                          object:nil
-                                                           queue:[NSOperationQueue mainQueue]
-                                                      usingBlock:^(NSNotification *notification) {
-            NSLog(@"[LaunchMyApp] Scene will connect notification received");
-            UIScene *scene = notification.object;
-            if ([scene isKindOfClass:[UIWindowScene class]]) {
-                UIWindowScene *windowScene = (UIWindowScene *)scene;
-                // Check connectionOptions for URL
-                // Note: connectionOptions is only available during scene:willConnectToSession:options:
-                // This notification doesn't give us access to it directly
-            }
-        }];
-
-        // Swizzle scene delegate methods if available
-        // We need to do this after the scene delegate class is known
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self swizzleSceneDelegateMethods];
-        });
+        // For iOS 13+, swizzle CDVSceneDelegate IMMEDIATELY (before it's used)
+        // CDVSceneDelegate should already be loaded since it's part of Cordova
+        Class sceneClass = NSClassFromString(@"CDVSceneDelegate");
+        if (sceneClass) {
+            NSLog(@"[LaunchMyApp] Found CDVSceneDelegate in +load, swizzling immediately");
+            [self swizzleSceneDelegateClass:sceneClass];
+        } else {
+            NSLog(@"[LaunchMyApp] CDVSceneDelegate not found in +load, will try later");
+            // Fallback: try again on main queue (for warm start cases)
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self swizzleSceneDelegateMethods];
+            });
+        }
 
         NSLog(@"[LaunchMyApp] AppDelegate category loaded - swizzling complete");
     });
+}
+
++ (void)swizzleSceneDelegateClass:(Class)sceneClass {
+    NSLog(@"[LaunchMyApp] Swizzling scene delegate class: %@", NSStringFromClass(sceneClass));
+
+    // Swizzle scene:openURLContexts: for warm start
+    SEL openURLSel = @selector(scene:openURLContexts:);
+    SEL swizzledOpenURLSel = @selector(launchMyApp_scene:openURLContexts:);
+    Method swizzledOpenURL = class_getInstanceMethod([self class], swizzledOpenURLSel);
+    if (swizzledOpenURL) {
+        class_addMethod(sceneClass, swizzledOpenURLSel,
+                       method_getImplementation(swizzledOpenURL),
+                       method_getTypeEncoding(swizzledOpenURL));
+        swizzleMethodOnClass(sceneClass, openURLSel, swizzledOpenURLSel);
+    }
+
+    // Swizzle scene:willConnectToSession:options: for cold start
+    SEL willConnectSel = @selector(scene:willConnectToSession:options:);
+    SEL swizzledWillConnectSel = @selector(launchMyApp_scene:willConnectToSession:options:);
+    Method swizzledWillConnect = class_getInstanceMethod([self class], swizzledWillConnectSel);
+    if (swizzledWillConnect) {
+        class_addMethod(sceneClass, swizzledWillConnectSel,
+                       method_getImplementation(swizzledWillConnect),
+                       method_getTypeEncoding(swizzledWillConnect));
+        swizzleMethodOnClass(sceneClass, willConnectSel, swizzledWillConnectSel);
+    }
 }
 
 + (void)swizzleSceneDelegateMethods {
@@ -138,29 +154,7 @@ static void swizzleMethodOnClass(Class class, SEL originalSelector, SEL swizzled
     }
 
     if (sceneClass) {
-        NSLog(@"[LaunchMyApp] Found scene delegate class: %@", NSStringFromClass(sceneClass));
-
-        // Swizzle scene:openURLContexts: for warm start
-        SEL openURLSel = @selector(scene:openURLContexts:);
-        SEL swizzledOpenURLSel = @selector(launchMyApp_scene:openURLContexts:);
-        Method swizzledOpenURL = class_getInstanceMethod([self class], swizzledOpenURLSel);
-        if (swizzledOpenURL) {
-            class_addMethod(sceneClass, swizzledOpenURLSel,
-                           method_getImplementation(swizzledOpenURL),
-                           method_getTypeEncoding(swizzledOpenURL));
-            swizzleMethodOnClass(sceneClass, openURLSel, swizzledOpenURLSel);
-        }
-
-        // Swizzle scene:willConnectToSession:options: for cold start
-        SEL willConnectSel = @selector(scene:willConnectToSession:options:);
-        SEL swizzledWillConnectSel = @selector(launchMyApp_scene:willConnectToSession:options:);
-        Method swizzledWillConnect = class_getInstanceMethod([self class], swizzledWillConnectSel);
-        if (swizzledWillConnect) {
-            class_addMethod(sceneClass, swizzledWillConnectSel,
-                           method_getImplementation(swizzledWillConnect),
-                           method_getTypeEncoding(swizzledWillConnect));
-            swizzleMethodOnClass(sceneClass, willConnectSel, swizzledWillConnectSel);
-        }
+        [self swizzleSceneDelegateClass:sceneClass];
     } else {
         NSLog(@"[LaunchMyApp] No scene delegate class found");
     }

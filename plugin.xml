@@ -2,7 +2,7 @@
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
         xmlns:android="http://schemas.android.com/apk/res/android"
         id="cordova-plugin-customurlscheme"
-        version="5.1.0">
+        version="5.2.0">
 
   <name>Custom URL scheme</name>
 
@@ -41,6 +41,8 @@
 
     <header-file src="src/ios/LaunchMyApp.h" />
     <source-file src="src/ios/LaunchMyApp.m" />
+    <header-file src="src/ios/AppDelegate+LaunchMyApp.h" />
+    <source-file src="src/ios/AppDelegate+LaunchMyApp.m" />
 
     <config-file target="*-Info.plist" parent="CFBundleURLTypes">
       <array>

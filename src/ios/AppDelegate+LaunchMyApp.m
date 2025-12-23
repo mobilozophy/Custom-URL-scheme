@@ -1,8 +1,12 @@
 /*
  * AppDelegate+LaunchMyApp - Category to capture URL on cold start
  *
- * This category swizzles the AppDelegate to capture incoming URLs
- * BEFORE plugins are initialized, ensuring cold start URLs are stored.
+ * This category swizzles both AppDelegate and SceneDelegate to capture
+ * incoming URLs BEFORE plugins are initialized.
+ *
+ * iOS 13+ with Scenes: URL comes via scene:willConnectToSession:options: (cold)
+ *                      or scene:openURLContexts: (warm)
+ * iOS 12 and earlier:  URL comes via application:openURL:options:
  *
  * Copyright (c) 2024 Mobilozophy, LLC
  * MIT License
@@ -13,32 +17,62 @@
 
 static NSString* const kLastUrlKey = @"LaunchMyApp_lastUrl";
 
-@implementation AppDelegate (LaunchMyApp)
+// Helper function to store URL
+static void storeURL(NSURL *url, NSString *source) {
+    if (!url) return;
 
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        // Swizzle application:openURL:options: to capture URLs immediately
-        [self swizzleMethod:@selector(application:openURL:options:)
-                 withMethod:@selector(launchMyApp_application:openURL:options:)];
+    NSLog(@"[LaunchMyApp] %@ - Storing URL: %@", source, url.absoluteString);
+    [[NSUserDefaults standardUserDefaults] setObject:url.absoluteString forKey:kLastUrlKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 
-        NSLog(@"[LaunchMyApp] AppDelegate category loaded - URL capture swizzled");
+    // DEBUG: Show native alert
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Small delay to ensure UI is ready
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIAlertController *alert = [UIAlertController
+                alertControllerWithTitle:@"[LaunchMyApp Debug]"
+                message:[NSString stringWithFormat:@"%@\n\nURL: %@", source, url.absoluteString]
+                preferredStyle:UIAlertControllerStyleAlert];
+
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+
+            UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+            while (rootVC.presentedViewController) {
+                rootVC = rootVC.presentedViewController;
+            }
+            if (rootVC) {
+                [rootVC presentViewController:alert animated:YES completion:nil];
+            }
+        });
     });
 }
 
-+ (void)swizzleMethod:(SEL)originalSelector withMethod:(SEL)swizzledSelector {
-    Class class = [self class];
-
+// Helper function to swizzle a method on any class
+static void swizzleMethodOnClass(Class class, SEL originalSelector, SEL swizzledSelector) {
     Method originalMethod = class_getInstanceMethod(class, originalSelector);
     Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
 
-    // If original doesn't exist, add it first
-    BOOL didAddMethod = class_addMethod(class,
-                                        originalSelector,
-                                        method_getImplementation(swizzledMethod),
-                                        method_getTypeEncoding(swizzledMethod));
+    if (!swizzledMethod) {
+        NSLog(@"[LaunchMyApp] Swizzled method not found for %@", NSStringFromSelector(swizzledSelector));
+        return;
+    }
 
-    if (didAddMethod) {
+    if (!originalMethod) {
+        // Original doesn't exist, just add our method as the original
+        class_addMethod(class,
+                       originalSelector,
+                       method_getImplementation(swizzledMethod),
+                       method_getTypeEncoding(swizzledMethod));
+        NSLog(@"[LaunchMyApp] Added %@ to %@", NSStringFromSelector(originalSelector), NSStringFromClass(class));
+        return;
+    }
+
+    BOOL didAdd = class_addMethod(class,
+                                  originalSelector,
+                                  method_getImplementation(swizzledMethod),
+                                  method_getTypeEncoding(swizzledMethod));
+
+    if (didAdd) {
         class_replaceMethod(class,
                            swizzledSelector,
                            method_getImplementation(originalMethod),
@@ -46,42 +80,132 @@ static NSString* const kLastUrlKey = @"LaunchMyApp_lastUrl";
     } else {
         method_exchangeImplementations(originalMethod, swizzledMethod);
     }
+    NSLog(@"[LaunchMyApp] Swizzled %@ on %@", NSStringFromSelector(originalSelector), NSStringFromClass(class));
 }
 
-- (BOOL)launchMyApp_application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
-    NSLog(@"[LaunchMyApp] Intercepted URL in AppDelegate: %@", url.absoluteString);
+@implementation AppDelegate (LaunchMyApp)
 
-    // Store the URL IMMEDIATELY - before any other processing
-    if (url) {
-        [[NSUserDefaults standardUserDefaults] setObject:url.absoluteString forKey:kLastUrlKey];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-        NSLog(@"[LaunchMyApp] URL stored in NSUserDefaults: %@", url.absoluteString);
++ (void)load {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSLog(@"[LaunchMyApp] AppDelegate category loading...");
 
-        // DEBUG: Show native alert to confirm URL was captured
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"[LaunchMyApp Debug]"
-                message:[NSString stringWithFormat:@"URL Captured!\n\n%@", url.absoluteString]
-                preferredStyle:UIAlertControllerStyleAlert];
+        // Swizzle AppDelegate for iOS 12 and earlier (and some edge cases)
+        swizzleMethodOnClass([self class],
+                            @selector(application:openURL:options:),
+                            @selector(launchMyApp_application:openURL:options:));
 
-            UIAlertAction *okAction = [UIAlertAction
-                actionWithTitle:@"OK"
-                style:UIAlertActionStyleDefault
-                handler:nil];
+        // For iOS 13+, we need to swizzle the SceneDelegate
+        // Cordova uses CDVAppDelegate which may have a scene delegate
+        // We'll also observe for scene connection to catch cold start URLs
 
-            [alert addAction:okAction];
-
-            // Get the root view controller to present the alert
-            UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-            while (rootVC.presentedViewController) {
-                rootVC = rootVC.presentedViewController;
+        [[NSNotificationCenter defaultCenter] addObserverForName:UISceneWillConnectNotification
+                                                          object:nil
+                                                           queue:[NSOperationQueue mainQueue]
+                                                      usingBlock:^(NSNotification *notification) {
+            NSLog(@"[LaunchMyApp] Scene will connect notification received");
+            UIScene *scene = notification.object;
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIWindowScene *windowScene = (UIWindowScene *)scene;
+                // Check connectionOptions for URL
+                // Note: connectionOptions is only available during scene:willConnectToSession:options:
+                // This notification doesn't give us access to it directly
             }
-            [rootVC presentViewController:alert animated:YES completion:nil];
+        }];
+
+        // Swizzle scene delegate methods if available
+        // We need to do this after the scene delegate class is known
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self swizzleSceneDelegateMethods];
         });
+
+        NSLog(@"[LaunchMyApp] AppDelegate category loaded - swizzling complete");
+    });
+}
+
++ (void)swizzleSceneDelegateMethods {
+    // Find the scene delegate class - Cordova typically uses its own
+    Class sceneClass = NSClassFromString(@"CDVSceneDelegate");
+    if (!sceneClass) {
+        // Try getting it from the scene configuration
+        NSArray *scenes = [UIApplication sharedApplication].connectedScenes.allObjects;
+        for (UIScene *scene in scenes) {
+            if (scene.delegate) {
+                sceneClass = [scene.delegate class];
+                break;
+            }
+        }
     }
 
-    // Call the original implementation (which will post the notification, etc.)
+    if (sceneClass) {
+        NSLog(@"[LaunchMyApp] Found scene delegate class: %@", NSStringFromClass(sceneClass));
+
+        // Swizzle scene:openURLContexts: for warm start
+        SEL openURLSel = @selector(scene:openURLContexts:);
+        SEL swizzledOpenURLSel = @selector(launchMyApp_scene:openURLContexts:);
+        Method swizzledOpenURL = class_getInstanceMethod([self class], swizzledOpenURLSel);
+        if (swizzledOpenURL) {
+            class_addMethod(sceneClass, swizzledOpenURLSel,
+                           method_getImplementation(swizzledOpenURL),
+                           method_getTypeEncoding(swizzledOpenURL));
+            swizzleMethodOnClass(sceneClass, openURLSel, swizzledOpenURLSel);
+        }
+
+        // Swizzle scene:willConnectToSession:options: for cold start
+        SEL willConnectSel = @selector(scene:willConnectToSession:options:);
+        SEL swizzledWillConnectSel = @selector(launchMyApp_scene:willConnectToSession:options:);
+        Method swizzledWillConnect = class_getInstanceMethod([self class], swizzledWillConnectSel);
+        if (swizzledWillConnect) {
+            class_addMethod(sceneClass, swizzledWillConnectSel,
+                           method_getImplementation(swizzledWillConnect),
+                           method_getTypeEncoding(swizzledWillConnect));
+            swizzleMethodOnClass(sceneClass, willConnectSel, swizzledWillConnectSel);
+        }
+    } else {
+        NSLog(@"[LaunchMyApp] No scene delegate class found");
+    }
+}
+
+#pragma mark - Swizzled Methods
+
+- (BOOL)launchMyApp_application:(UIApplication *)app openURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
+    NSLog(@"[LaunchMyApp] application:openURL:options: called");
+    storeURL(url, @"AppDelegate openURL");
+
+    // Call original
     return [self launchMyApp_application:app openURL:url options:options];
+}
+
+- (void)launchMyApp_scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
+    NSLog(@"[LaunchMyApp] scene:openURLContexts: called with %lu contexts", (unsigned long)URLContexts.count);
+
+    for (UIOpenURLContext *context in URLContexts) {
+        storeURL(context.URL, @"SceneDelegate openURLContexts (warm)");
+    }
+
+    // Call original if it exists
+    if ([self respondsToSelector:@selector(launchMyApp_scene:openURLContexts:)]) {
+        [self launchMyApp_scene:scene openURLContexts:URLContexts];
+    }
+}
+
+- (void)launchMyApp_scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    NSLog(@"[LaunchMyApp] scene:willConnectToSession:options: called");
+
+    // Check for URLs in connectionOptions (cold start)
+    if (connectionOptions.URLContexts.count > 0) {
+        NSLog(@"[LaunchMyApp] Found %lu URL contexts in connectionOptions", (unsigned long)connectionOptions.URLContexts.count);
+        for (UIOpenURLContext *context in connectionOptions.URLContexts) {
+            storeURL(context.URL, @"SceneDelegate willConnect (cold)");
+        }
+    } else {
+        NSLog(@"[LaunchMyApp] No URL contexts in connectionOptions");
+    }
+
+    // Call original
+    if ([self respondsToSelector:@selector(launchMyApp_scene:willConnectToSession:options:)]) {
+        [self launchMyApp_scene:scene willConnectToSession:session options:connectionOptions];
+    }
 }
 
 @end

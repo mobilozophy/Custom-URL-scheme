@@ -14,6 +14,7 @@
 
 #import "AppDelegate+LaunchMyApp.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 static NSString* const kLastUrlKey = @"LaunchMyApp_lastUrl";
 
@@ -177,9 +178,12 @@ static void swizzleMethodOnClass(Class class, SEL originalSelector, SEL swizzled
         storeURL(context.URL, @"SceneDelegate openURLContexts (warm)");
     }
 
-    // Call original if it exists
-    if ([self respondsToSelector:@selector(launchMyApp_scene:openURLContexts:)]) {
-        [self launchMyApp_scene:scene openURLContexts:URLContexts];
+    // Call original (after swizzle, this selector points to the original implementation)
+    // Use performSelector to avoid compile-time checking
+    SEL originalSel = @selector(launchMyApp_scene:openURLContexts:);
+    if ([self respondsToSelector:originalSel]) {
+        NSLog(@"[LaunchMyApp] Calling original scene:openURLContexts:");
+        ((void (*)(id, SEL, UIScene *, NSSet *))objc_msgSend)(self, originalSel, scene, URLContexts);
     }
 }
 
@@ -196,9 +200,13 @@ static void swizzleMethodOnClass(Class class, SEL originalSelector, SEL swizzled
         NSLog(@"[LaunchMyApp] No URL contexts in connectionOptions");
     }
 
-    // Call original
-    if ([self respondsToSelector:@selector(launchMyApp_scene:willConnectToSession:options:)]) {
-        [self launchMyApp_scene:scene willConnectToSession:session options:connectionOptions];
+    // Call original (after swizzle, this selector points to the original implementation)
+    SEL originalSel = @selector(launchMyApp_scene:willConnectToSession:options:);
+    if ([self respondsToSelector:originalSel]) {
+        NSLog(@"[LaunchMyApp] Calling original scene:willConnectToSession:options:");
+        ((void (*)(id, SEL, UIScene *, UISceneSession *, UISceneConnectionOptions *))objc_msgSend)(self, originalSel, scene, session, connectionOptions);
+    } else {
+        NSLog(@"[LaunchMyApp] WARNING: No original scene:willConnectToSession:options: to call!");
     }
 }
 

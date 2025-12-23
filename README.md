@@ -11,16 +11,17 @@
 [twitter-image]:https://img.shields.io/twitter/follow/eddyverbruggen.svg?style=social&label=Follow%20me
 [twitter-url]:https://twitter.com/eddyverbruggen
 
-1. [Description](https://github.com/EddyVerbruggen/Custom-URL-scheme#1-description)
-2. [Installation](https://github.com/EddyVerbruggen/Custom-URL-scheme#2-installation)
-	1. [Automatically (CLI / Plugman)](https://github.com/EddyVerbruggen/Custom-URL-scheme#automatically-cli--plugman)
-	2. [Manually](https://github.com/EddyVerbruggen/Custom-URL-scheme#manually)
-	3. [PhoneGap Build](https://github.com/EddyVerbruggen/Custom-URL-scheme#phonegap-build)
-3. [Usage](https://github.com/EddyVerbruggen/Custom-URL-scheme#3-usage)
-	1. [iOS](https://github.com/EddyVerbruggen/Custom-URL-scheme#ios-usage)
-	2. [Meteor](https://github.com/EddyVerbruggen/Custom-URL-scheme#meteor--getlastintent-android-only)
-4. [URL Scheme hints](https://github.com/EddyVerbruggen/Custom-URL-scheme#4-url-scheme-hints)
-5. [License](https://github.com/EddyVerbruggen/Custom-URL-scheme#5-license)
+1. [Description](#1-description)
+2. [Installation](#2-installation)
+	1. [Automatically (CLI / Plugman)](#automatically-cli--plugman)
+	2. [Manually](#manually)
+	3. [PhoneGap Build](#phonegap-build)
+3. [Usage](#3-usage)
+	1. [iOS](#ios-usage)
+	2. [Meteor / getLastIntent (Android)](#meteor--getlastintent-android-only)
+	3. [Remote Content Apps / getLastUrl (iOS)](#remote-content-apps--getlasturl-ios)
+4. [URL Scheme hints](#4-url-scheme-hints)
+5. [License](#5-license)
 
 
 ### BEWARE: 
@@ -210,6 +211,71 @@ Meteor.startup(function() {
     return;
   }
 });
+```
+
+### Remote Content Apps / getLastUrl (iOS)
+When your Cordova app loads remote content (e.g., a website in the WebView), the standard `handleOpenURL` callback may not work reliably on cold start. This is because the JavaScript injection gets lost when the WebView navigates to the remote URL.
+
+**Mobilozophy Fork Enhancement:** This fork adds iOS support for retrieving the launch URL programmatically, similar to Android's `getLastIntent`.
+
+#### Available Methods (iOS)
+
+**getLastUrl** - Read the stored URL without clearing it:
+```javascript
+window.plugins.launchmyapp.getLastUrl(function(url) {
+  if (url) {
+    console.log("App was launched with URL: " + url);
+    // URL is still stored - can be read again
+  }
+}, function(error) {
+  console.log("Error getting URL: " + error);
+});
+```
+
+**getLastUrlAndClear** - Read the URL and clear it from storage (recommended for most use cases):
+```javascript
+document.addEventListener('deviceready', function() {
+  window.plugins.launchmyapp.getLastUrlAndClear(function(url) {
+    if (url) {
+      console.log("Processing URL: " + url);
+      // Handle the URL - it's now cleared from storage
+      // This prevents re-processing on subsequent page loads
+    }
+  }, function(error) {
+    console.log("No launch URL");
+  });
+}, false);
+```
+
+**clearLastUrl** - Clear the stored URL without reading it:
+```javascript
+window.plugins.launchmyapp.clearLastUrl(function() {
+  console.log("URL cleared");
+}, function(error) {
+  console.log("Error clearing URL: " + error);
+});
+```
+
+#### Typical Usage Pattern
+For remote content apps, call `getLastUrlAndClear` after `deviceready` to check if the app was launched via a custom URL scheme:
+
+```javascript
+document.addEventListener('deviceready', function() {
+  // Check for launch URL on cold start
+  if (window.plugins && window.plugins.launchmyapp) {
+    window.plugins.launchmyapp.getLastUrlAndClear(function(url) {
+      if (url) {
+        // Parse and handle the URL
+        var match = url.match(/mycoolapp:\/\/(.+)/);
+        if (match) {
+          handleDeepLink(match[1]);
+        }
+      }
+    }, function(error) {
+      // No URL - normal app launch
+    });
+  }
+}, false);
 ```
 
 ## 4. URL Scheme hints

@@ -2,7 +2,7 @@
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0"
         xmlns:android="http://schemas.android.com/apk/res/android"
         id="cordova-plugin-customurlscheme"
-        version="5.0.2">
+        version="5.1.0">
 
   <name>Custom URL scheme</name>
 
@@ -17,9 +17,9 @@
 
   <keywords>Custom URL Scheme, URLscheme, URL scheme, Custom URL, Launch My App, Launch App</keywords>
 
-  <repo>https://github.com/EddyVerbruggen/Custom-URL-scheme.git</repo>
+  <repo>https://github.com/mobilozophy/Custom-URL-scheme.git</repo>
 
-  <issue>https://github.com/EddyVerbruggen/Custom-URL-scheme/issues</issue>
+  <issue>https://github.com/mobilozophy/Custom-URL-scheme/issues</issue>
 
   <preference name="URL_SCHEME" />
 
@@ -32,6 +32,15 @@
     <js-module src="www/ios/LaunchMyApp.js" name="LaunchMyApp">
       <clobbers target="window.plugins.launchmyapp" />
     </js-module>
+
+    <config-file target="config.xml" parent="/*">
+      <feature name="LaunchMyApp">
+        <param name="ios-package" value="LaunchMyApp"/>
+      </feature>
+    </config-file>
+
+    <header-file src="src/ios/LaunchMyApp.h" />
+    <source-file src="src/ios/LaunchMyApp.m" />
 
     <config-file target="*-Info.plist" parent="CFBundleURLTypes">
       <array>
